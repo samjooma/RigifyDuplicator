@@ -1,5 +1,4 @@
 import bpy
-from bpy.app.handlers import persistent
 from . import duplicator
 from . import misc
 
@@ -15,6 +14,14 @@ class RigifyDuplicatorOperator(bpy.types.Operator):
 
     name_suffix: bpy.props.StringProperty(
         default="_Converted", name="Name suffix", description="Suffix to add to the name of the new object. Any object with the same name is overwritten"
+    )
+
+    convert_to_twist_bones: bpy.props.BoolProperty(
+        default=True, name="Convert to twist bones", description="Convert limb segments into twist bones"
+    )
+
+    twist_bone_suffix: bpy.props.StringProperty(
+        default="twist", name="Twist bone suffix", description="Suffix to add to twist bone names"
     )
 
     @classmethod
@@ -38,13 +45,15 @@ class RigifyDuplicatorOperator(bpy.types.Operator):
             any(child.type == "MESH" for child in x.children) and
             x.data.get("rig_id") is not None
         ]
-
+        
         for rig_object in valid_rigs:
             # Do the conversion.
             created_rig = duplicator.convert_rigify_rig(
                 context,
                 rig_object,
-                self.name_suffix
+                self.name_suffix,
+                self.convert_to_twist_bones,
+                self.twist_bone_suffix,
             )
 
             # Remove DEF prefix.
@@ -63,6 +72,15 @@ class RigifyDuplicatorOperator(bpy.types.Operator):
     
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
+    
+    def draw(self, context):
+        layout = self.layout
+
+        layout.prop(data=self, property="name_suffix")
+        layout.prop(data=self, property="convert_to_twist_bones")
+        row = layout.row()
+        row.enabled = self.convert_to_twist_bones
+        row.prop(data=self, property="twist_bone_suffix")
 
 #
 # Registration.

@@ -2,105 +2,45 @@ from collections import defaultdict
 import bpy
 from . import misc
 
-class RigConverterException(Exception):
-    pass
-
-class ActionGroup:
-    def __init__(self, name, action_dict):
-        self.name = name
-        self.actions = defaultdict(set)
-
-def convert_rigify_rig(context, original_armature, name_suffix):
+def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist_bones, twist_bone_suffix):
     if original_armature.data.get("rig_id") is None:
         raise TypeError(f"Object {original_armature} is not a Rigify rig.")
 
     if not context.mode == "OBJECT":
         bpy.ops.object.mode_set(mode="OBJECT")
-    
-    #
-    # Find root bone.
-    #
-
-    root_bone_candidates = [
-        x for x in original_armature.data.bones if
-        (x.parent is None or x.parent == "") and not x.name.startswith("DEF-") and not x.name.startswith("ORG-") and not x.name.startswith("MCH-")
-    ]
-    if len(root_bone_candidates) != 1:
-        raise RuntimeError(f"Couldn't find root bone in armature \"{original_armature.name}\".")
-    original_root_bone = root_bone_candidates[0]
 
     #
-    # Create new rig object.
-    #
-
-    # Find object to overwrite.
-    new_rig_name = f"{original_armature.name}{name_suffix}"
-    new_armature_data_name = new_rig_name
-    overwrite_rig_object = None
-    try:
-        found_object = bpy.data.objects[new_rig_name]
-        if found_object.type == "ARMATURE":
-            overwrite_rig_object = found_object
-        else:
-            bpy.data.objects.remove(found_object)
-    except KeyError:
-        pass
-
-    created_armature_data = bpy.data.armatures.new("temp")
-    if overwrite_rig_object is not None:
-        old_armature_data = overwrite_rig_object.data
-        overwrite_rig_object.data = created_armature_data
-        created_rig = overwrite_rig_object
-    else:
-        created_rig = bpy.data.objects.new(new_rig_name, created_armature_data)
-        context.scene.collection.objects.link(created_rig)
-
-    if overwrite_rig_object is not None:
-        bpy.data.armatures.remove(old_armature_data)
-    created_rig.data.name = new_armature_data_name
-
-    # Make rig object's collection included and visible.
-    layer_collections = misc.find_layer_collections(created_rig)
-    for layer_collection in layer_collections:
-        layer_collection.exclude = False
-        layer_collection.hide_viewport = False
-
-    #
-    # Create new mesh objects.
+    # Mesh data.
     #
 
     for child_mesh in (x for x in original_armature.children if x.type == "MESH"):
         new_mesh_name = f"{child_mesh.name}{name_suffix}"
-        new_mesh_data_name = new_mesh_name
-        overwrite_mesh_object = None
+
         try:
-            found_object = bpy.data.objects[new_mesh_name]
-            if found_object.type == "MESH":
-                overwrite_mesh_object = found_object
-            else:
-                bpy.data.objects.remove(found_object)
+            # Use existing mesh.
+            created_mesh = bpy.data.objects[new_mesh_name]
+            created_mesh.data = child_mesh.data.copy()
+
+            # Remove modifiers.
+            while len(created_mesh.modifiers) > 0:
+                created_mesh.modifiers.remove(created_mesh.modifiers[0])
+
+            # Clear parent.
+            context_override = context.copy()
+            context_override["selected_editable_objects"] = [created_mesh]
+            context_override["active_object"] = created_mesh
+            with context.temp_override(**context_override):
+                bpy.ops.object.parent_clear(type="CLEAR")
+                pass
         except KeyError:
-            pass
-        
-        created_mesh_data = child_mesh.data.copy()
-        if overwrite_mesh_object is not None:
-            old_mesh_data = overwrite_mesh_object.data
-            overwrite_mesh_object.data = created_mesh_data
-            created_mesh = overwrite_mesh_object
-        else:
-            created_mesh = bpy.data.objects.new(new_mesh_name, created_mesh_data)
+            # Create new mesh.
+            created_mesh = bpy.data.objects.new("temp", child_mesh.data.copy())
             context.scene.collection.objects.link(created_mesh)
 
-        if overwrite_mesh_object is not None:
-            bpy.data.meshes.remove(old_mesh_data)
-        created_mesh.data.name = new_mesh_data_name
+        created_mesh.name = new_mesh_name
+        created_mesh.data.name = new_mesh_name
 
-        # Parent mesh to rig and add armature modifier.
-        created_mesh.parent = created_rig
-        while len(created_mesh.modifiers) > 0:
-            created_mesh.modifiers.remove(created_mesh.modifiers[0])
-        armatue_modifier = created_mesh.modifiers.new(name="Armature", type="ARMATURE")
-        armatue_modifier.object = created_rig
+        misc.make_object_and_collection_visible(context, created_mesh)
 
     #
     # Get bone rolls.
@@ -110,14 +50,10 @@ def convert_rigify_rig(context, original_armature, name_suffix):
     # This new rig won't actually be used for anything except to be able to access the bone roll variable in edit mode.
     # Would be nice if that variable existed in the normal bone data and not just the edit bones.
     bone_roll_rig_data = original_armature.data.copy()
-    bone_roll_rig = bpy.data.objects.new("bone_roll_rig", bone_roll_rig_data)
+    bone_roll_rig = bpy.data.objects.new("Bone roll armature", bone_roll_rig_data)
     context.scene.collection.objects.link(bone_roll_rig)
 
-    # Make collection included and visible.
-    layer_collections = misc.find_layer_collections(bone_roll_rig)
-    for layer_collection in layer_collections:
-        layer_collection.exclude = False
-        layer_collection.hide_viewport = False
+    misc.make_object_and_collection_visible(context, bone_roll_rig)
 
     # Make linked data local.
     context_override = context.copy()
@@ -126,8 +62,12 @@ def convert_rigify_rig(context, original_armature, name_suffix):
         bpy.ops.object.make_local(type="SELECT_OBDATA")
 
     #
-    # Copy bones to the new rig.
+    # Armature data.
     #
+
+    created_armature_data = bpy.data.armatures.new("temp")
+    created_rig = bpy.data.objects.new("temp", created_armature_data)
+    context.scene.collection.objects.link(created_rig)
 
     # Select the new rig.
     bpy.ops.object.select_all(action="DESELECT")
@@ -137,7 +77,7 @@ def convert_rigify_rig(context, original_armature, name_suffix):
 
     bpy.ops.object.mode_set(mode="EDIT")
 
-    # Add bones.
+    # Copy bones to the new rig.
     def create_bone(original_bone):
         new_bone = created_rig.data.edit_bones.new(original_bone.name)
         new_bone.inherit_scale = original_bone.inherit_scale
@@ -152,24 +92,84 @@ def convert_rigify_rig(context, original_armature, name_suffix):
         new_bone.roll = bone_roll_rig.data.edit_bones[original_bone.name].roll
         for child in original_bone.children:
             create_bone(child)
-
     for parentless_bone in (x for x in original_armature.data.bones if x.parent is None):
         create_bone(parentless_bone)
 
-    bpy.ops.object.mode_set(mode="POSE")
+    bpy.ops.object.mode_set(mode="OBJECT")
 
     # Remove bone roll rig.
     bpy.data.objects.remove(bone_roll_rig)
     bpy.data.armatures.remove(bone_roll_rig_data)
 
+    # Overwrite existing armature data.
+    new_rig_name = f"{original_armature.name}{name_suffix}"
+    try:
+        pending_removal = created_rig
+        created_rig = bpy.data.objects[new_rig_name]
+        created_rig.data = created_armature_data
+        bpy.data.objects.remove(pending_removal)
+    except KeyError:
+        pass
+
+    try:
+        bpy.data.armatures.remove(bpy.data.armatures[new_rig_name])
+    except KeyError:
+        pass
+
+    created_rig.name = new_rig_name
+    created_rig.data.name = new_rig_name
+
+    misc.make_object_and_collection_visible(context, created_rig)
+
     #
-    # Modify rigify bones.
+    # Set mesh parents.
     #
+
+    for child_mesh in (x for x in original_armature.children if x.type == "MESH"):
+        mesh_name = f"{child_mesh.name}{name_suffix}"
+        created_mesh = bpy.data.objects[mesh_name]
+
+        # Set mesh parents.
+        context_override = context.copy()
+        context_override["selected_editable_objects"] = [created_mesh, created_rig]
+        context_override["active_object"] = created_rig
+        if child_mesh.parent_type == "BONE":
+            with context.temp_override(**context_override):
+                context.active_object.data.bones.active = created_rig.data.bones[child_mesh.parent_bone]
+                bpy.ops.object.parent_set(type="BONE", keep_transform=False)
+        elif child_mesh.parent_type == "OBJECT":
+            with context.temp_override(**context_override):
+                bpy.ops.object.parent_set(type="OBJECT", keep_transform=False)
+        
+        # Create armature modifier.
+        try:
+            source_modifier = next(x for x in child_mesh.modifiers if isinstance(x, bpy.types.ArmatureModifier))
+            new_modifier = created_mesh.modifiers.new(name="Armature", type="ARMATURE")
+            new_modifier.object = created_rig
+            new_modifier.vertex_group = source_modifier.vertex_group
+            new_modifier.use_deform_preserve_volume = source_modifier.use_deform_preserve_volume
+            new_modifier.use_multi_modifier = source_modifier.use_multi_modifier
+            new_modifier.use_vertex_groups = source_modifier.use_vertex_groups
+            new_modifier.use_bone_envelopes = source_modifier.use_bone_envelopes
+        except StopIteration:
+            pass
+
+    #
+    # Modify rigify deform bones.
+    #
+
+    bpy.ops.object.select_all(action="DESELECT")
+    created_rig.select_set(True)
+    context.view_layer.objects.active = created_rig
 
     bpy.ops.object.mode_set(mode="EDIT")
 
+    deform_bones = [x for x in created_rig.data.edit_bones if x.name.startswith("DEF-")]
+    base_bone_names = [x.name[4:] for x in created_rig.data.edit_bones if x.name.startswith("ORG-")]
+    base_deform_bones = [x for x in deform_bones if x.name[4:] in base_bone_names]
+
     # Find deform bones and replace their parents with a deform version of the parent bone.
-    for edit_bone in (x for x in created_rig.data.edit_bones if x.name.startswith("DEF-") and x.parent is not None):
+    for edit_bone in (x for x in deform_bones if x.parent is not None):
         def get_new_parent(edit_bone):
             if edit_bone.parent.name.startswith("DEF-"):
                 return edit_bone.parent
@@ -180,7 +180,16 @@ def convert_rigify_rig(context, original_armature, name_suffix):
         if new_parent is not None and new_parent.name == edit_bone.name:
             new_parent = get_new_parent(edit_bone.parent)
         edit_bone.parent = new_parent
-    
+
+    # Find root bone.
+    root_bone_candidates = [
+        x for x in original_armature.data.bones if
+        (x.parent is None or x.parent == "") and not x.name.startswith("DEF-") and not x.name.startswith("ORG-") and not x.name.startswith("MCH-")
+    ]
+    if len(root_bone_candidates) != 1:
+        raise RuntimeError(f"Couldn't find root bone in armature \"{original_armature.name}\".")
+    original_root_bone = root_bone_candidates[0]
+
     # Remove non-deform bones (but keep root).
     root_bone = created_rig.data.edit_bones[original_root_bone.name]
     for edit_bone in created_rig.data.edit_bones:
@@ -193,12 +202,94 @@ def convert_rigify_rig(context, original_armature, name_suffix):
             edit_bone.parent = root_bone
 
     #
+    # Replace limb segments with twist bones.
+    #
+
+    # Store the names that the bones had before being renamed.
+    old_bone_names = {}
+
+    def find_namesake_children(bone, bone_name):
+        bone_segments = []
+        for child_bone in bone.children:
+            if child_bone.name.startswith(bone_name):
+                bone_segments.append(child_bone)
+                bone_segments = bone_segments + find_namesake_children(child_bone, bone_name)
+        return bone_segments
+
+    if convert_to_twist_bones:
+        for edit_bone in base_deform_bones:
+            # Limb segments have the same name as the parent.
+            # For example bone "DEF-upperarm_l" would have a segment named "DEF-upperarm_l.001".
+            bone_segments = find_namesake_children(edit_bone, edit_bone.name)
+
+            # Rename bone segments to twist bones.
+            for i, bone_segment in enumerate(bone_segments):
+                # Find the left/right part of the bone name. There is no built-in function that does it,
+                # so we flip the name of the bone, then compare the difference of the new name to the original name.
+
+                original_name = bone_segment.name
+
+                bpy.ops.armature.select_all(action="DESELECT")
+                bone_segment.select = True
+                bpy.ops.armature.flip_names()
+                flipped_name = context.selected_bones[0].name
+                bpy.ops.armature.select_all(action="DESELECT")
+
+                bone_segment.name = original_name
+
+                first_different_index = len(bone_segment.name)
+                try:
+                    first_different_index = next(i for i, x in enumerate(bone_segment.name) if x != flipped_name[i])
+                except StopIteration:
+                    pass
+
+                first_side_index = len(bone_segment.name)
+                try:
+                    first_side_index = next(i for i, x in enumerate(bone_segment.name) if i >= first_different_index and x in ["l", "L", "r", "R"])
+                except StopIteration:
+                    pass
+
+                first_suffix_index = len(bone_segment.name)
+                if len(bone_segment.name) - first_side_index >= 4:
+                    if bone_segment.name[-4] == "." and bone_segment.name[-3:].isdigit():
+                        first_suffix_index = len(bone_segment.name) - 4
+
+                # Rename bone.
+                if (
+                    first_different_index < len(bone_segment.name) and
+                    first_side_index < len(bone_segment.name) and
+                    first_suffix_index < len(bone_segment.name)
+                ):
+                    base_name = bone_segment.name[0:first_different_index]
+                    side_name = bone_segment.name[first_side_index:first_suffix_index]
+                    twist_bone_name = f"{base_name}{twist_bone_suffix}_{i+1:02}_{side_name}"
+
+                    old_bone_names[twist_bone_name] = bone_segment.name
+                    bone_segment.name = twist_bone_name
+
+            # Reparent twist bones.
+            for bone_segment in bone_segments:
+                bone_segment.use_connect = False
+                bone_segment.parent = edit_bone
+                # Reparent children of twist bones.
+                for child_bone in bone_segment.children:
+                    child_bone.use_connect = False
+                    child_bone.parent = edit_bone
+
+            if len(bone_segments) > 0:
+                # Move bone's tail to the end of the twist bone chain.
+                last_chain_bone = bone_segments[len(bone_segments) - 1]
+                edit_bone.tail = last_chain_bone.head
+
+    #
     # Add copy constraints.
     #
 
     bpy.ops.object.mode_set(mode = "OBJECT")
 
     bpy.ops.object.select_all(action="DESELECT")
+    created_rig.hide_set(False)
+    created_rig.hide_viewport = False
     created_rig.select_set(True)
     context.view_layer.objects.active = created_rig
 
@@ -212,8 +303,12 @@ def convert_rigify_rig(context, original_armature, name_suffix):
         # Add copy constraint.
         new_constraint = pose_bone.constraints.new("COPY_TRANSFORMS")
         new_constraint.target = original_armature
-        new_constraint.subtarget = pose_bone.name
-    
+
+        try:
+            new_constraint.subtarget = old_bone_names[pose_bone.name]
+        except KeyError:
+            new_constraint.subtarget = pose_bone.name
+
     bpy.ops.object.mode_set(mode = "OBJECT")
-    
+
     return created_rig

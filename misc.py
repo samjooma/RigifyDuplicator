@@ -21,13 +21,22 @@ def replace_suffix(string, oldsuffix, newsuffix):
         raise RuntimeError(f'String "{string}" does not end with suffix "{oldsuffix}"')
     return string + newsuffix
 
-def find_layer_collections(object):
+def find_layer_collections(context, object):
     def find_layer_collections_recursive(layer_collection):
-        result = set()
+        result = set([])
         if any(x for x in layer_collection.collection.objects if x == object):
             result.add(layer_collection)
         for child in layer_collection.children:
             for x in find_layer_collections_recursive(child):
                 result.add(x)
         return result
-    return find_layer_collections_recursive(bpy.context.view_layer.layer_collection)
+    return find_layer_collections_recursive(context.view_layer.layer_collection)
+
+def make_object_and_collection_visible(context, object):
+    layer_collections = find_layer_collections(context, object)
+    for layer_collection in layer_collections:
+        layer_collection.exclude = False
+        layer_collection.hide_viewport = False
+        layer_collection.collection.hide_viewport = False
+    object.hide_set(False)
+    object.hide_viewport = False
