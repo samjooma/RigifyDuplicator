@@ -13,7 +13,7 @@ class RigifyDuplicatorOperator(bpy.types.Operator):
     bl_options = {"REGISTER"}
 
     name_suffix: bpy.props.StringProperty(
-        default="_Converted", name="Name suffix", description="Suffix to add to the name of the new object. Any object with the same name is overwritten"
+        default="_Converted", name="Name suffix", description="Suffix to add to the name of the new object"
     )
 
     convert_to_twist_bones: bpy.props.BoolProperty(

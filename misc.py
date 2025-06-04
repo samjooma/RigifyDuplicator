@@ -21,6 +21,15 @@ def replace_suffix(string, oldsuffix, newsuffix):
         raise RuntimeError(f'String "{string}" does not end with suffix "{oldsuffix}"')
     return string + newsuffix
 
+def split_name(name):
+    if len(name) > 4 and name[-4] == "." and name[-3:].isdigit():
+        base_name = name[:-4]
+        suffix = name[-4:]
+    else:
+        base_name = name
+        suffix = ""
+    return base_name, suffix
+
 def find_layer_collections(context, object):
     def find_layer_collections_recursive(layer_collection):
         result = set([])
