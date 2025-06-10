@@ -10,48 +10,46 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
         bpy.ops.object.mode_set(mode="OBJECT")
     
     #
-    # Duplicate data.
+    # Duplicate armature.
     #
 
     bpy.ops.object.select_all(action="DESELECT")
 
-    def get_hierarchy_recursive(object):
-        children = [object]
-        for child in object.children:
-            children = children + get_hierarchy_recursive(child)
-        return children
-    
-    for object in get_hierarchy_recursive(original_armature):
-        object.select_set(True)
-    
+    for object in misc.get_hierarchy_recursive(original_armature):
+        layer_collection = misc.find_layer_collection(context, object)
+        if layer_collection.exclude == False:
+            object.select_set(True)
     context.view_layer.objects.active = original_armature
 
-    bpy.ops.object.duplicate(linked=False)
-    
-    for x in context.selected_objects:
-        x.users_collection[0].objects.unlink(x)
-        context.scene.collection.objects.link(x)
+    bpy.ops.object.duplicate(linked=True)
 
     created_meshes = [x for x in context.selected_objects if x.type == "MESH"]
     created_rig = context.active_object
+    created_objects = created_meshes + [created_rig]
 
-    # Rename objects.
-    created_hierarchy = get_hierarchy_recursive(created_rig)
-    for object in created_hierarchy:
-        object.name = f"{misc.split_name(object.name)[0]}{name_suffix}"
-        object.data.name = f"{misc.split_name(object.data.name)[0]}{name_suffix}"
+    # Duplicate data too.
+    for created_object in created_objects:
+        created_object.data = created_object.data.copy()
 
-    bpy.ops.object.select_all(action="DESELECT")
+    # Make linked data local.
+    context_override = context.copy()
+    context_override["selected_objects"] = created_objects
+    with context.temp_override(**context_override):
+        bpy.ops.object.make_local(type="SELECT_OBDATA")
+    
+    # Fix parents.
+    for created_mesh in created_meshes:
+        if created_mesh.parent == original_armature:
+            created_mesh.parent = created_rig
+
+    # Add suffix to names.
+    for object in created_meshes + [created_rig]:
+        object.name = f"{misc.split_suffix_digits(object.name)[0]}{name_suffix}"
+        object.data.name = f"{misc.split_suffix_digits(object.data.name)[0]}{name_suffix}"
 
     #
-    # Remove drivers, modifiers and bone constraints.
-    #
-
-    bpy.ops.object.select_all(action="DESELECT")
-    created_rig.select_set(True)
-    context.view_layer.objects.active = created_rig
-
     # Remove drivers
+    #
 
     try:
         drivers = created_rig.animation_data.drivers
@@ -66,30 +64,41 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
     except AttributeError:
         pass
 
-    for mesh in created_meshes:
+    for created_mesh in created_meshes:
         try:
-            drivers = mesh.animation_data.drivers
+            drivers = created_mesh.animation_data.drivers
             while len(drivers) > 0:
                 drivers.remove(drivers[0])
         except AttributeError:
             pass
         try:
-            drivers = mesh.data.animation_data.drivers
+            drivers = created_mesh.data.animation_data.drivers
             while len(drivers) > 0:
                 drivers.remove(drivers[0])
         except AttributeError:
             pass
 
-    # Remove modifiers
+    #
+    # Remove all modifiers except armature modifiers, and fix armature modifier targets.
+    #
 
     for modifier in [x for x in created_rig.modifiers]:
         created_rig.modifiers.remove(modifier)
     
     for mesh in created_meshes:
-        for modifier in [x for x in mesh.modifiers if not isinstance(x, bpy.types.ArmatureModifier)]:
-            mesh.modifiers.remove(modifier)
+        for modifier in [x for x in mesh.modifiers]:
+            if isinstance(mesh, bpy.types.ArmatureModifier) and modifier.object == original_armature:
+                modifier.objects = created_rig
+            else:
+                mesh.modifiers.remove(modifier)
 
+    #
     # Remove bone contraints.
+    #
+
+    bpy.ops.object.select_all(action="DESELECT")
+    created_rig.select_set(True)
+    context.view_layer.objects.active = created_rig
 
     bpy.ops.object.mode_set(mode="POSE")
     for bone in created_rig.pose.bones:
@@ -204,7 +213,7 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
                     first_different_index < len(bone_segment.name) and
                     first_side_index < len(bone_segment.name)
                 ):
-                    base_name, _ = misc.split_name(bone_segment.name)
+                    base_name, _ = misc.split_suffix_digits(bone_segment.name)
                     
                     common_part = base_name[0:first_different_index]
                     side_name = base_name[first_side_index:]
@@ -254,6 +263,21 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
         except KeyError:
             new_constraint.subtarget = pose_bone.name
 
-    bpy.ops.object.mode_set(mode = "OBJECT")
+    bpy.ops.object.mode_set(mode="EDIT")
+
+    #
+    # Rename bones.
+    #
+
+    # Rename root.
+    root_bone = created_rig.data.edit_bones[original_root_bone.name]
+    root_bone.name = "root"
+
+    # Remove DEF prefix from bone names.
+    for bone in created_rig.data.edit_bones:
+        if bone != root_bone:
+            bone.name = misc.replace_prefix(bone.name, "DEF-", "")
+
+    bpy.ops.object.mode_set(mode="OBJECT")
 
     return created_rig
