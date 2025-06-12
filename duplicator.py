@@ -15,7 +15,9 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
 
     bpy.ops.object.select_all(action="DESELECT")
 
-    for object in misc.get_hierarchy_recursive(original_armature):
+    original_objects = misc.get_hierarchy_recursive(original_armature)
+
+    for object in original_objects:
         layer_collection = misc.find_layer_collection(context, object)
         if layer_collection.exclude == False:
             object.select_set(True)
@@ -23,9 +25,20 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
 
     bpy.ops.object.duplicate(linked=True)
 
-    created_meshes = [x for x in context.selected_objects if x.type == "MESH"]
     created_rig = context.active_object
+
+    for object in original_objects:
+        object.select_set(False)
+    context.view_layer.objects.active = None
+
+    created_meshes = [x for x in context.selected_objects if x.type == "MESH"]
     created_objects = created_meshes + [created_rig]
+
+    # Move objects to the scene collection.
+    for created_object in created_objects:
+        layer_collection = misc.find_layer_collection(context, created_object)
+        layer_collection.collection.objects.unlink(created_object)
+        context.scene.collection.objects.link(created_object)
 
     # Duplicate data too.
     for created_object in created_objects:
@@ -79,18 +92,19 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
             pass
 
     #
-    # Remove all modifiers except armature modifiers, and fix armature modifier targets.
+    # Remove all modifiers except armature modifiers.
     #
 
     for modifier in [x for x in created_rig.modifiers]:
         created_rig.modifiers.remove(modifier)
     
-    for mesh in created_meshes:
-        for modifier in [x for x in mesh.modifiers]:
-            if isinstance(mesh, bpy.types.ArmatureModifier) and modifier.object == original_armature:
-                modifier.objects = created_rig
+    for created_mesh in created_meshes:
+        for modifier in [x for x in created_mesh.modifiers]:
+            if isinstance(modifier, bpy.types.ArmatureModifier):
+                if modifier.object == original_armature:
+                    modifier.object = created_rig
             else:
-                mesh.modifiers.remove(modifier)
+                created_mesh.modifiers.remove(modifier)
 
     #
     # Remove bone contraints.

@@ -61,9 +61,9 @@ class RigifyDuplicatorOperator(bpy.types.Operator):
             bpy.ops.object.mode_set(mode="OBJECT")
 
         bpy.ops.object.select_all(action="DESELECT")
-        for x in created_armatures:
-            x.select_set(True)
-            context.view_layer.objects.active = x
+        for created_armature in created_armatures:
+            created_armature.select_set(True)
+            context.view_layer.objects.active = created_armature
 
         return {"FINISHED"}
     
