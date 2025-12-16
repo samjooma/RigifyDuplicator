@@ -61,6 +61,19 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
         object.data.name = f"{misc.split_suffix_digits(object.data.name)[0]}{name_suffix}"
 
     #
+    # Apply all modifiers except armature modifier.
+    #
+
+    for created_object in created_objects:
+        context_override = context.copy()
+        context_override["selected_objects"] = created_object
+        context_override["active_object"] = created_object
+        with context.temp_override(**context_override):
+            modifier_names = [x.name for x in created_object.modifiers if x.type != "ARMATURE"]
+            for x in modifier_names:
+                bpy.ops.object.modifier_apply(modifier=x)
+    
+    #
     # Remove drivers
     #
 
