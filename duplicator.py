@@ -15,24 +15,29 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
 
     bpy.ops.object.select_all(action="DESELECT")
 
-    original_objects = misc.get_hierarchy_recursive(original_armature)
-
-    for object in original_objects:
+    def duplicate(object):
+        bpy.ops.object.select_all(action="DESELECT")
         layer_collection = misc.find_layer_collection(context, object)
         if layer_collection.exclude == False:
             object.select_set(True)
-    context.view_layer.objects.active = original_armature
+        context.view_layer.objects.active = object
+        bpy.ops.object.duplicate(linked=True)
+        return context.active_object
+    
+    original_objects = misc.get_hierarchy_recursive(original_armature)
+    created_objects_map = {}
+    for object in original_objects:
+        created_objects_map[object] = duplicate(object)
+    bpy.ops.object.select_all(action="DESELECT")
 
-    bpy.ops.object.duplicate(linked=True)
-
-    created_rig = context.active_object
-
+    created_armature = created_objects_map[original_armature]
+    created_meshes = [created_objects_map[x] for x in created_objects_map if x.type == "MESH"]
+    
     for object in original_objects:
         object.select_set(False)
     context.view_layer.objects.active = None
 
-    created_meshes = [x for x in context.selected_objects if x.type == "MESH"]
-    created_objects = created_meshes + [created_rig]
+    created_objects = created_meshes + [created_armature]
 
     # Move objects to the scene collection.
     for created_object in created_objects:
@@ -53,12 +58,13 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
     # Fix parents.
     for created_mesh in created_meshes:
         if created_mesh.parent == original_armature:
-            created_mesh.parent = created_rig
+            created_mesh.parent = created_armature
 
     # Add suffix to names.
-    for object in created_meshes + [created_rig]:
-        object.name = f"{misc.split_suffix_digits(object.name)[0]}{name_suffix}"
-        object.data.name = f"{misc.split_suffix_digits(object.data.name)[0]}{name_suffix}"
+    for object in created_meshes + [created_armature]:
+        original_object = next(x for x in created_objects_map if created_objects_map[x] == object)
+        object.name = f"{original_object.name}{name_suffix}"
+        object.data.name = f"{original_object.data.name}{name_suffix}"
 
     #
     # Apply all modifiers except armature modifier.
@@ -71,20 +77,23 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
         with context.temp_override(**context_override):
             modifier_names = [x.name for x in created_object.modifiers if x.type != "ARMATURE"]
             for x in modifier_names:
-                bpy.ops.object.modifier_apply(modifier=x)
+                try:
+                    bpy.ops.object.modifier_apply(modifier=x)
+                except RuntimeError:
+                    pass
     
     #
     # Remove drivers
     #
 
     try:
-        drivers = created_rig.animation_data.drivers
+        drivers = created_armature.animation_data.drivers
         while len(drivers) > 0:
             drivers.remove(drivers[0])
     except AttributeError:
         pass
     try:
-        drivers = created_rig.data.animation_data.drivers
+        drivers = created_armature.data.animation_data.drivers
         while len(drivers) > 0:
             drivers.remove(drivers[0])
     except AttributeError:
@@ -108,14 +117,14 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
     # Remove all modifiers except armature modifiers.
     #
 
-    for modifier in [x for x in created_rig.modifiers]:
-        created_rig.modifiers.remove(modifier)
+    for modifier in [x for x in created_armature.modifiers]:
+        created_armature.modifiers.remove(modifier)
     
     for created_mesh in created_meshes:
         for modifier in [x for x in created_mesh.modifiers]:
             if isinstance(modifier, bpy.types.ArmatureModifier):
                 if modifier.object == original_armature:
-                    modifier.object = created_rig
+                    modifier.object = created_armature
             else:
                 created_mesh.modifiers.remove(modifier)
 
@@ -124,11 +133,11 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
     #
 
     bpy.ops.object.select_all(action="DESELECT")
-    created_rig.select_set(True)
-    context.view_layer.objects.active = created_rig
+    created_armature.select_set(True)
+    context.view_layer.objects.active = created_armature
 
     bpy.ops.object.mode_set(mode="POSE")
-    for bone in created_rig.pose.bones:
+    for bone in created_armature.pose.bones:
         while len(bone.constraints) > 0:
             bone.constraints.remove(bone.constraints[0])
     bpy.ops.object.mode_set(mode="OBJECT")
@@ -140,18 +149,18 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
     #
 
     bpy.ops.object.select_all(action="DESELECT")
-    created_rig.select_set(True)
-    context.view_layer.objects.active = created_rig
+    created_armature.select_set(True)
+    context.view_layer.objects.active = created_armature
 
     bpy.ops.object.mode_set(mode="EDIT")
 
     # Make all bones visible.
-    for bone_collection in created_rig.data.collections_all:
+    for bone_collection in created_armature.data.collections_all:
         bone_collection.is_visible = True
         bpy.ops.armature.reveal()
 
-    deform_bones = [x for x in created_rig.data.edit_bones if x.name.startswith("DEF-")]
-    base_bone_names = [x.name[4:] for x in created_rig.data.edit_bones if x.name.startswith("ORG-")]
+    deform_bones = [x for x in created_armature.data.edit_bones if x.name.startswith("DEF-")]
+    base_bone_names = [x.name[4:] for x in created_armature.data.edit_bones if x.name.startswith("ORG-")]
     base_deform_bones = [x for x in deform_bones if x.name[4:] in base_bone_names]
 
     # Find deform bones and replace their parents with a deform version of the parent bone.
@@ -160,7 +169,7 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
             if edit_bone.parent.name.startswith("DEF-"):
                 return edit_bone.parent
             if edit_bone.parent.name.startswith("ORG-"):
-                return created_rig.data.edit_bones[misc.replace_prefix(edit_bone.parent.name, "ORG", "DEF")]
+                return created_armature.data.edit_bones[misc.replace_prefix(edit_bone.parent.name, "ORG", "DEF")]
             return None
         new_parent = get_new_parent(edit_bone)
         if new_parent is not None and new_parent.name == edit_bone.name:
@@ -177,13 +186,13 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
     original_root_bone = root_bone_candidates[0]
 
     # Remove non-deform bones (but keep root).
-    root_bone = created_rig.data.edit_bones[original_root_bone.name]
-    for edit_bone in created_rig.data.edit_bones:
+    root_bone = created_armature.data.edit_bones[original_root_bone.name]
+    for edit_bone in created_armature.data.edit_bones:
         if edit_bone != root_bone and not edit_bone.name.startswith("DEF-"):
-            created_rig.data.edit_bones.remove(edit_bone)
+            created_armature.data.edit_bones.remove(edit_bone)
 
     # Set the parent of parentless bones to the root bone.
-    for edit_bone in created_rig.data.edit_bones:
+    for edit_bone in created_armature.data.edit_bones:
         if edit_bone.parent is None:
             edit_bone.parent = root_bone
 
@@ -270,14 +279,14 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
     bpy.ops.object.mode_set(mode = "OBJECT")
 
     bpy.ops.object.select_all(action="DESELECT")
-    created_rig.hide_set(False)
-    created_rig.hide_viewport = False
-    created_rig.select_set(True)
-    context.view_layer.objects.active = created_rig
+    created_armature.hide_set(False)
+    created_armature.hide_viewport = False
+    created_armature.select_set(True)
+    context.view_layer.objects.active = created_armature
 
     bpy.ops.object.mode_set(mode = "POSE")
 
-    for pose_bone in created_rig.pose.bones:
+    for pose_bone in created_armature.pose.bones:
         # Remove old constraints.
         while len(pose_bone.constraints) > 0:
             pose_bone.constraints.remove(pose_bone.constraints[0])
@@ -297,14 +306,14 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
     #
 
     # Rename root.
-    root_bone = created_rig.data.edit_bones[original_root_bone.name]
+    root_bone = created_armature.data.edit_bones[original_root_bone.name]
     root_bone.name = "root"
 
     # Remove DEF prefix from bone names.
-    for bone in created_rig.data.edit_bones:
+    for bone in created_armature.data.edit_bones:
         if bone != root_bone:
             bone.name = misc.replace_prefix(bone.name, "DEF-", "")
 
     bpy.ops.object.mode_set(mode="OBJECT")
 
-    return created_rig
+    return created_armature
