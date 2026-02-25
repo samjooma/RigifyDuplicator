@@ -45,7 +45,7 @@ class RigifyDuplicatorOperator(bpy.types.Operator):
             any(child.type == "MESH" for child in x.children) and
             x.data.get("rig_id") is not None
         ]
-        
+
         created_armatures = []
         for armature in valid_armatures:
             created_armature = duplicator.convert_rigify_rig(
@@ -66,10 +66,10 @@ class RigifyDuplicatorOperator(bpy.types.Operator):
             context.view_layer.objects.active = created_armature
 
         return {"FINISHED"}
-    
+
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
-    
+
     def draw(self, context):
         layout = self.layout
 
@@ -94,9 +94,8 @@ def register():
     for c in classes:
         bpy.utils.register_class(c)
     bpy.types.VIEW3D_MT_add.append(menu_func)
-    
+
 def unregister():
     for c in classes:
         bpy.utils.unregister_class(c)
     bpy.types.VIEW3D_MT_add.remove(menu_func)
-    

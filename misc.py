@@ -30,11 +30,6 @@ def split_suffix_digits(name):
         suffix = ""
     return base_name, suffix
 
-def get_hierarchy_recursive(object):
-    children = [object]
-    for child in object.children:
-        children = children + get_hierarchy_recursive(child)
-    return children
 
 def find_layer_collection(context, object):
     def find_layer_collections_recursive(layer_collection):
@@ -44,7 +39,7 @@ def find_layer_collection(context, object):
         for child in layer_collection.children:
             result = result + find_layer_collections_recursive(child)
         return result
-    
+
     layer_collections = find_layer_collections_recursive(context.view_layer.layer_collection)
     if len(layer_collections) > 1:
         raise RuntimeError(f"Object {object.name} is in more than one collection.")

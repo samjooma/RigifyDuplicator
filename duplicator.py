@@ -5,10 +5,10 @@ from . import misc
 def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist_bones, twist_bone_suffix):
     if original_armature.data.get("rig_id") is None:
         raise TypeError(f"Object {original_armature} is not a Rigify rig.")
-    
+
     if not context.mode == "OBJECT":
         bpy.ops.object.mode_set(mode="OBJECT")
-    
+
     #
     # Duplicate armature.
     #
@@ -18,13 +18,18 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
     def duplicate(object):
         bpy.ops.object.select_all(action="DESELECT")
         layer_collection = misc.find_layer_collection(context, object)
-        if layer_collection.exclude == False:
-            object.select_set(True)
+        assert (
+            object.visible_get(view_layer=context.view_layer) == True
+        ), f'Tried duplicating object "{object.name}" that is hidden from view.'
+        assert (
+            layer_collection.exclude == False
+        ), f'Tried duplicating object "{object.name}" that is in an excluded collection.'
+        object.select_set(True)
         context.view_layer.objects.active = object
         bpy.ops.object.duplicate(linked=True)
         return context.active_object
-    
-    original_objects = misc.get_hierarchy_recursive(original_armature)
+
+    original_objects = [x for x in original_armature.children_recursive if x.visible_get(view_layer=context.view_layer)] + [original_armature]
     created_objects_map = {}
     for object in original_objects:
         created_objects_map[object] = duplicate(object)
@@ -32,7 +37,7 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
 
     created_armature = created_objects_map[original_armature]
     created_meshes = [created_objects_map[x] for x in created_objects_map if x.type == "MESH"]
-    
+
     for object in original_objects:
         object.select_set(False)
     context.view_layer.objects.active = None
@@ -54,7 +59,7 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
     context_override["selected_objects"] = created_objects
     with context.temp_override(**context_override):
         bpy.ops.object.make_local(type="SELECT_OBDATA")
-    
+
     # Fix parents.
     for created_mesh in created_meshes:
         if created_mesh.parent == original_armature:
@@ -81,7 +86,7 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
                     bpy.ops.object.modifier_apply(modifier=x)
                 except RuntimeError:
                     pass
-    
+
     #
     # Remove drivers
     #
@@ -119,7 +124,7 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
 
     for modifier in [x for x in created_armature.modifiers]:
         created_armature.modifiers.remove(modifier)
-    
+
     for created_mesh in created_meshes:
         for modifier in [x for x in created_mesh.modifiers]:
             if isinstance(modifier, bpy.types.ArmatureModifier):
@@ -250,7 +255,7 @@ def convert_rigify_rig(context, original_armature, name_suffix, convert_to_twist
                     first_side_index < len(bone_segment.name)
                 ):
                     base_name, _ = misc.split_suffix_digits(bone_segment.name)
-                    
+
                     common_part = base_name[0:first_different_index]
                     side_name = base_name[first_side_index:]
                     new_bone_name = f"{common_part}{twist_bone_suffix}_{i+1:02}_{side_name}"
